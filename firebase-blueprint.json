@@ -1,0 +1,139 @@
+{
+  "entities": {
+    "Client": {
+      "title": "Client",
+      "description": "Represents a motorcycle owner and their vehicle's maintenance status.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Client's full name" },
+        "bikeModel": { "type": "string", "description": "Motorcycle model" },
+        "oilType": { "type": "string", "description": "Type of oil used" },
+        "contact": { "type": "string", "description": "WhatsApp contact number" },
+        "lastMaintenanceDate": { "type": "string", "format": "date-time", "description": "Date of the last service" },
+        "nextMaintenanceDate": { "type": "string", "format": "date-time", "description": "Date of the next scheduled service" },
+        "recurrenceDays": { "type": "integer", "description": "Interval in days between services" },
+        "status": { "type": "string", "enum": ["OK", "WARNING", "OVERDUE"], "description": "Current maintenance status" },
+        "notificacao_enviada": { "type": "boolean", "description": "Control flag for automated notifications" },
+        "userId": { "type": "string", "description": "Owner of this record" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastAlertDate": { "type": "string", "description": "Legacy alert date (YYYY-MM-DD)" },
+        "automation": {
+          "type": "object",
+          "properties": {
+            "lastAlertDate": { "type": "string" },
+            "lastSendAt": { "type": "string", "format": "date-time" },
+            "lastSendStatus": { "type": "string" },
+            "lastSendChannel": { "type": "string" },
+            "sendAttempts": { "type": "integer" },
+            "nextSendEligibleAt": { "type": "string" },
+            "lastError": { "type": "string" }
+          }
+        }
+      },
+      "required": ["name", "bikeModel", "contact", "lastMaintenanceDate", "nextMaintenanceDate", "recurrenceDays", "userId"]
+    },
+    "MaintenanceRecord": {
+      "title": "Maintenance Record",
+      "description": "Historical record of a specific maintenance service.",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string", "description": "Reference to the client" },
+        "clientName": { "type": "string" },
+        "bikeModel": { "type": "string" },
+        "date": { "type": "string", "format": "date-time", "description": "Date service was performed" },
+        "oilType": { "type": "string" },
+        "notes": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["clientId", "date", "userId"]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "User-specific application settings.",
+      "type": "object",
+      "properties": {
+        "whatsappTemplate": { "type": "string", "description": "Template for WhatsApp alerts" },
+        "userId": { "type": "string" }
+      },
+      "required": ["userId"]
+    },
+    "Warranty": {
+      "title": "Warranty",
+      "description": "Represents a service warranty certificate.",
+      "type": "object",
+      "properties": {
+        "clientName": { "type": "string" },
+        "serviceType": { "type": "string" },
+        "serviceDescription": { "type": "string" },
+        "serviceValue": { "type": "number" },
+        "serviceDate": { "type": "string", "format": "date-time" },
+        "durationMonths": { "type": "integer" },
+        "expiryDate": { "type": "string", "format": "date-time" },
+        "clientPhone": { "type": "string" },
+        "warrantyNumber": { "type": "integer" },
+        "userId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientName", "serviceType", "serviceDate", "durationMonths", "warrantyNumber", "userId"]
+    },
+    "AlertLog": {
+      "title": "Alert Log",
+      "description": "Log of WhatsApp alert attempts sent to clients (Legacy).",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "bikeModel": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "message": { "type": "string" },
+        "status": { "type": "string", "enum": ["SENT", "FAILED"] },
+        "userId": { "type": "string" }
+      },
+      "required": ["clientId", "timestamp", "status", "userId"]
+    },
+    "MessageLog": {
+      "title": "Message Log",
+      "description": "Detailed log of messages sent to clients.",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "clientName": { "type": "string" },
+        "bikeModel": { "type": "string" },
+        "phone": { "type": "string" },
+        "channel": { "type": "string", "enum": ["whatsapp", "email", "manual"] },
+        "status": { "type": "string", "enum": ["pending", "opened_whatsapp", "sent", "failed"] },
+        "trigger": { "type": "string", "enum": ["manual", "scheduled", "retry"] },
+        "message": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" }
+      },
+      "required": ["clientId", "clientName", "phone", "channel", "status", "trigger", "message", "createdAt", "userId"]
+    }
+  },
+  "firestore": {
+    "/clients/{clientId}": {
+      "schema": "Client",
+      "description": "Collection of clients and their bike status"
+    },
+    "/maintenances/{maintenanceId}": {
+      "schema": "MaintenanceRecord",
+      "description": "Historical log of all maintenances"
+    },
+    "/settings/{userId}": {
+      "schema": "Settings",
+      "description": "User preferences and templates"
+    },
+    "/warranties/{warrantyId}": {
+      "schema": "Warranty",
+      "description": "Collection of warranty certificates"
+    },
+    "/alert_logs/{logId}": {
+      "schema": "AlertLog",
+      "description": "Log of all alert attempts (Legacy)"
+    },
+    "/message_logs/{logId}": {
+      "schema": "MessageLog",
+      "description": "Detailed log of all message attempts"
+    }
+  }
+}

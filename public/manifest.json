@@ -1,0 +1,23 @@
+{
+  "name": "MotoFix Recorrentes",
+  "short_name": "MotoFix",
+  "description": "Gerenciamento de troca de óleo e garantias de serviço",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#f2780d",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/4606/4606466.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/4606/4606466.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

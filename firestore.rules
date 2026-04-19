@@ -1,0 +1,174 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // GLOBAL CATCH-ALL
+    // ===============================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ===============================================================
+    // SHARED HELPERS
+    // ===============================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isEmailVerified() && (
+        request.auth.token.email == "6snailiw@gmail.com" ||
+        request.auth.token.email == "emailgithubb@gmail.com"
+      );
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActiveUser() {
+      return isAdmin() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().isActive == true);
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isImmutable(field) {
+      return !(field in incoming()) || (field in existing() && incoming()[field] == existing()[field]);
+    }
+
+    // ===============================================================
+    // VALIDATION BLUEPRINTS
+    // ===============================================================
+
+    function isValidDate(d) {
+      return d is string && d.size() <= 64 && d.matches('^\\d{4}-\\d{2}-\\d{2}.*$');
+    }
+
+    function isValidClient(data) {
+      return data.userId == request.auth.uid &&
+             data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+             data.bikeModel is string && data.bikeModel.size() <= 100 &&
+             data.contact is string && data.contact.size() <= 32 &&
+             isValidDate(data.lastMaintenanceDate) &&
+             isValidDate(data.nextMaintenanceDate) &&
+             data.recurrenceDays is int && data.recurrenceDays > 0 &&
+             data.status in ['OK', 'WARNING', 'OVERDUE'] &&
+             (!('oilPrice' in data) || (data.oilPrice is number)) &&
+             (!('oilType' in data) || (data.oilType is string)) &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000));
+    }
+
+    function isValidMaintenance(data) {
+      return data.userId == request.auth.uid &&
+             data.clientId is string && isValidId(data.clientId) &&
+             isValidDate(data.date) &&
+             data.serviceValue is number;
+    }
+
+    function isValidWarranty(data) {
+      return data.userId == request.auth.uid &&
+             data.clientName is string &&
+             data.serviceType is string &&
+             isValidDate(data.serviceDate) &&
+             isValidDate(data.expiryDate) &&
+             data.durationMonths is int &&
+             data.warrantyNumber is int;
+    }
+
+    // ===============================================================
+    // COLLECTION RULES
+    // ===============================================================
+
+    // USERS: The source of truth for authorization
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      
+      allow create: if isOwner(userId) && 
+                      incoming().uid == userId &&
+                      incoming().role == 'user' &&
+                      (incoming().isActive == false || isAdmin()) && // Non-admins start as inactive
+                      incoming().email == request.auth.token.email &&
+                      incoming().keys().hasAll(['uid', 'email', 'role', 'isActive', 'createdAt']);
+      
+      allow update: if isAdmin() || (
+        isOwner(userId) && 
+        incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoUrl'])
+      );
+    }
+
+    // SETTINGS: Isolated per user
+    match /settings/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow create, update: if isOwner(userId) && isActiveUser() && 
+                            incoming().userId == userId;
+      allow delete: if isAdmin();
+    }
+
+    // CLIENTS: Isolated per user
+    match /clients/{clientId} {
+      allow get: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid; // Secure query enforcement
+      
+      allow create: if isActiveUser() && isValidClient(incoming()) && isValidId(clientId);
+      allow update: if isActiveUser() && existing().userId == request.auth.uid &&
+                      isValidClient(incoming()) &&
+                      isImmutable('userId') && isImmutable('createdAt');
+      allow delete: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
+    }
+
+    // MAINTENANCES: Historical records
+    match /maintenances/{maintenanceId} {
+      allow get: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isActiveUser() && isValidMaintenance(incoming()) &&
+                      exists(/databases/$(database)/documents/clients/$(incoming().clientId)) &&
+                      get(/databases/$(database)/documents/clients/$(incoming().clientId)).data.userId == request.auth.uid;
+      
+      allow update: if isAdmin(); // Generally immutable for users
+      allow delete: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
+    }
+
+    // WARRANTIES
+    match /warranties/{warrantyId} {
+      allow get: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      allow create: if isActiveUser() && isValidWarranty(incoming());
+      allow update: if isActiveUser() && existing().userId == request.auth.uid && isImmutable('userId');
+      allow delete: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
+    }
+
+    // MESSAGE LOGS
+    match /message_logs/{logId} {
+      allow get: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isActiveUser() && incoming().userId == request.auth.uid;
+      allow delete: if (isSignedIn() && existing().userId == request.auth.uid) || isAdmin();
+    }
+
+    match /alert_logs/{logId} {
+      allow read, write: if isAdmin() || (isSignedIn() && (resource == null || resource.data.userId == request.auth.uid) && (request.resource == null || request.resource.data.userId == request.auth.uid));
+    }
+  }
+}
+
