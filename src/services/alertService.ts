@@ -6,7 +6,7 @@ import {
   Firestore 
 } from 'firebase/firestore';
 import { format, parseISO, isValid } from 'date-fns';
-import { Client, MessageLog } from '../types';
+import { Client, MessageLog, Settings } from '../types';
 import { ReminderEligibility } from '../utils/reminderEligibility';
 
 export const AlertService = {
@@ -73,6 +73,100 @@ export const AlertService = {
   },
 
   /**
+   * Envia mensagem automaticamente via Evolution API.
+   */
+  sendEvolutionMessage: async (settings: Settings, client: Client, message: string) => {
+    if (!settings.evolutionApiUrl || !settings.evolutionApiKey || !settings.evolutionInstanceName) {
+      throw new Error("Configurações da Evolution API incompletas.");
+    }
+
+    const { evolutionApiUrl, evolutionApiKey, evolutionInstanceName } = settings;
+    
+    // Preparar número do cliente (apenas dígitos)
+    const rawPhone = client.contact || (client as any).phone || (client as any).whatsapp || '';
+    let phone = rawPhone.replace(/\D/g, '');
+    
+    // Garante 55 para Brasil se necessário
+    if ((phone.length === 10 || phone.length === 11)) {
+      phone = '55' + phone;
+    }
+
+    const cleanUrl = evolutionApiUrl.replace(/\/$/, ''); // Remove barra final se hovuer
+    const endpoint = `${cleanUrl}/message/sendText/${evolutionInstanceName}`;
+
+    // USAMOS PROXY PARA EVITAR MIXED CONTENT (HTTP -> HTTPS)
+    const response = await fetch('/api/evolution-proxy', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        url: endpoint,
+        apiKey: evolutionApiKey,
+        method: 'POST',
+        body: {
+          number: phone,
+          text: message,
+          linkPreview: true
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `Erro na API: ${response.status}`);
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Testa a conexão com a Evolution API buscando o status da instância.
+   */
+  checkEvolutionConnection: async (settings: Settings) => {
+    if (!settings.evolutionApiUrl || !settings.evolutionApiKey || !settings.evolutionInstanceName) {
+      throw new Error("Preencha todos os campos da API antes de testar.");
+    }
+
+    const cleanUrl = settings.evolutionApiUrl.replace(/\/$/, '');
+    // endpoint para verificar se a instância está conectada ao WhatsApp
+    const endpoint = `${cleanUrl}/instance/connectionStatus/${settings.evolutionInstanceName}`;
+
+    try {
+      // USAMOS PROXY PARA EVITAR MIXED CONTENT (HTTP -> HTTPS)
+      const response = await fetch('/api/evolution-proxy', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          url: endpoint,
+          apiKey: settings.evolutionApiKey,
+          method: 'GET'
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const detailedMessage = errorData.message || errorData.error || `Erro ${response.status}`;
+        
+        if (response.status === 404) {
+          throw new Error("Instância não encontrada. Verifique se o nome está correto no Evolution Manager.");
+        }
+        throw new Error(`Falha na Integração: ${detailedMessage} (${response.status})`);
+      }
+
+      const data = await response.json();
+      return data; // { instance: { state: "open", ... } }
+    } catch (error) {
+      if (error instanceof TypeError && error.message === "Failed to fetch") {
+        throw new Error("Não foi possível conectar ao servidor. Verifique se o IP e Porta estão corretos e se o Firewall permite conexões externas.");
+      }
+      throw error;
+    }
+  },
+
+  /**
    * Registra a tentativa MANUAL de lembrete (abertura do link wa.me).
    */
   registerManualReminderAttempt: async (db: Firestore, userId: string, client: Client, message: string) => {
@@ -128,5 +222,46 @@ export const AlertService = {
     };
 
     await updateDoc(doc(db, 'clients', client.id), updateData);
+  },
+
+  /**
+   * Registra a tentativa AUTOMÁTICA via API.
+   */
+  registerAutomaticReminder: async (db: Firestore, userId: string, client: Client, message: string, status: 'sent' | 'failed', error?: string) => {
+    const now = new Date().toISOString();
+    const dateOnly = now.split('T')[0];
+    
+    try {
+      const logData: MessageLog = {
+        clientId: client.id,
+        clientName: client.name,
+        bikeModel: client.bikeModel,
+        phone: client.contact,
+        channel: 'whatsapp',
+        status: status,
+        trigger: 'retry',
+        message: message,
+        createdAt: now,
+        sentAt: status === 'sent' ? now : undefined,
+        error: error,
+        userId: userId
+      };
+
+      await addDoc(collection(db, 'message_logs'), logData);
+
+      if (status === 'sent') {
+        await AlertService.updateClientReminderMetadata(db, client, now);
+      } else {
+        await updateDoc(doc(db, 'clients', client.id), {
+          'automation.lastError': error,
+          'automation.lastSendStatus': 'failed'
+        });
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error("Erro ao registrar automação:", error);
+      return { success: false, error };
+    }
   }
 };

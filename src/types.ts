@@ -72,6 +72,10 @@ export interface Settings {
   businessInstagram?: string;
   businessAddress?: string;
   isProfileComplete?: boolean;
+  // Evolution API Integration
+  evolutionApiUrl?: string; // e.g., http://159.65.228.86:8081
+  evolutionApiKey?: string; // e.g., MotoFix_Token_2026
+  evolutionInstanceName?: string; // e.g., MotoFix_Loja_1
 }
 
 export interface UserProfile {

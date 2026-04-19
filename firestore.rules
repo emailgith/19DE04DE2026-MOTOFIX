@@ -69,10 +69,28 @@ service cloud.firestore {
              data.contact is string && data.contact.size() <= 32 &&
              isValidDate(data.lastMaintenanceDate) &&
              isValidDate(data.nextMaintenanceDate) &&
-             data.recurrenceDays is int && data.recurrenceDays > 0 &&
+             (data.recurrenceDays is int || data.recurrenceDays is number) && data.recurrenceDays > 0 &&
              data.status in ['OK', 'WARNING', 'OVERDUE'] &&
              (!('oilPrice' in data) || (data.oilPrice is number)) &&
              (!('oilType' in data) || (data.oilType is string)) &&
+             (!('isRecurringRevenue' in data) || (data.isRecurringRevenue is bool)) &&
+             (!('notificacao_enviada' in data) || (data.notificacao_enviada is bool)) &&
+             (!('notificacaoStatus' in data) || (data.notificacaoStatus in ['pendente', 'concluido'])) &&
+             (!('lastServiceType' in data) || (data.lastServiceType is string)) &&
+             (!('lastServiceValue' in data) || (data.lastServiceValue is number)) &&
+             (!('lastServiceNotes' in data) || (data.lastServiceNotes is string)) &&
+             (!('lastAlertDate' in data) || (data.lastAlertDate is string)) &&
+             (!('createdAt' in data) || (data.createdAt is string)) &&
+             (!('automation' in data) || (
+               data.automation is map &&
+               (!('lastAlertDate' in data.automation) || (data.automation.lastAlertDate is string)) &&
+               (!('lastSendAt' in data.automation) || (isValidDate(data.automation.lastSendAt))) &&
+               (!('lastSendStatus' in data.automation) || (data.automation.lastSendStatus in ['pending', 'opened_whatsapp', 'sent', 'failed'])) &&
+               (!('lastSendChannel' in data.automation) || (data.automation.lastSendChannel in ['whatsapp', 'email', 'manual'])) &&
+               (!('sendAttempts' in data.automation) || (data.automation.sendAttempts is int || data.automation.sendAttempts is number)) &&
+               (!('nextSendEligibleAt' in data.automation) || (data.automation.nextSendEligibleAt is string)) &&
+               (!('lastError' in data.automation) || (data.automation.lastError is string || data.automation.lastError == null))
+             )) &&
              (!('notes' in data) || (data.notes is string && data.notes.size() <= 1000));
     }
 
@@ -80,7 +98,14 @@ service cloud.firestore {
       return data.userId == request.auth.uid &&
              data.clientId is string && isValidId(data.clientId) &&
              isValidDate(data.date) &&
-             data.serviceValue is number;
+             data.serviceValue is number &&
+             (!('isRecurringRevenue' in data) || (data.isRecurringRevenue is bool)) &&
+             (!('clientName' in data) || (data.clientName is string)) &&
+             (!('bikeModel' in data) || (data.bikeModel is string)) &&
+             (!('oilType' in data) || (data.oilType is string)) &&
+             (!('oilPrice' in data) || (data.oilPrice is number)) &&
+             (!('serviceType' in data) || (data.serviceType is string)) &&
+             (!('notes' in data) || (data.notes is string));
     }
 
     function isValidWarranty(data) {

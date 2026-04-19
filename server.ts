@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import axios from "axios";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,6 +14,42 @@ async function startServer() {
   // Middleware para JSON
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+
+  // Proxy para Evolution API (Contornar erro de Mixed Content / SSL)
+  app.post("/api/evolution-proxy", async (req, res) => {
+    const { url, apiKey, method, body } = req.body;
+
+    if (!url || !apiKey) {
+      return res.status(400).json({ error: "URL e API Key são obrigatórios." });
+    }
+
+    try {
+      const response = await axios({
+        url,
+        method: method || "GET",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": apiKey
+        },
+        data: body,
+        timeout: 10000 // 10 segundos de timeout
+      });
+
+      res.status(response.status).json(response.data);
+    } catch (error: any) {
+      const status = error.response?.status || 500;
+      
+      let errorMessage = error.message;
+      if (error.code === 'ECONNREFUSED') errorMessage = "Conexão Recusada: O servidor no DigitalOcean não está aceitando conexões na porta 8081. Verifique se o Docker está rodando.";
+      if (error.code === 'ETIMEDOUT') errorMessage = "Tempo Esgotado: O servidor demorou muito para responder. Verifique o Firewall.";
+      if (error.code === 'ENOTFOUND') errorMessage = "Endereço não encontrado: Verifique se o IP está correto.";
+      
+      console.error("Erro no Proxy da Evolution API:", errorMessage);
+      
+      const data = error.response?.data || { message: errorMessage };
+      res.status(status).json(data);
+    }
+  });
 
   // Rota de saúde básica
   app.get("/api/health", (req, res) => {

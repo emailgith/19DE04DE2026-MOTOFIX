@@ -13,7 +13,12 @@
         "nextMaintenanceDate": { "type": "string", "format": "date-time", "description": "Date of the next scheduled service" },
         "recurrenceDays": { "type": "integer", "description": "Interval in days between services" },
         "status": { "type": "string", "enum": ["OK", "WARNING", "OVERDUE"], "description": "Current maintenance status" },
+        "isRecurringRevenue": { "type": "boolean" },
         "notificacao_enviada": { "type": "boolean", "description": "Control flag for automated notifications" },
+        "notificacaoStatus": { "type": "string", "enum": ["pendente", "concluido"] },
+        "lastServiceType": { "type": "string" },
+        "lastServiceValue": { "type": "number" },
+        "lastServiceNotes": { "type": "string" },
         "userId": { "type": "string", "description": "Owner of this record" },
         "createdAt": { "type": "string", "format": "date-time" },
         "lastAlertDate": { "type": "string", "description": "Legacy alert date (YYYY-MM-DD)" },
@@ -22,8 +27,8 @@
           "properties": {
             "lastAlertDate": { "type": "string" },
             "lastSendAt": { "type": "string", "format": "date-time" },
-            "lastSendStatus": { "type": "string" },
-            "lastSendChannel": { "type": "string" },
+            "lastSendStatus": { "type": "string", "enum": ["pending", "opened_whatsapp", "sent", "failed"] },
+            "lastSendChannel": { "type": "string", "enum": ["whatsapp", "email", "manual"] },
             "sendAttempts": { "type": "integer" },
             "nextSendEligibleAt": { "type": "string" },
             "lastError": { "type": "string" }
@@ -42,6 +47,10 @@
         "bikeModel": { "type": "string" },
         "date": { "type": "string", "format": "date-time", "description": "Date service was performed" },
         "oilType": { "type": "string" },
+        "oilPrice": { "type": "number" },
+        "serviceType": { "type": "string" },
+        "serviceValue": { "type": "number" },
+        "isRecurringRevenue": { "type": "boolean" },
         "notes": { "type": "string" },
         "userId": { "type": "string" }
       },
@@ -53,6 +62,16 @@
       "type": "object",
       "properties": {
         "whatsappTemplate": { "type": "string", "description": "Template for WhatsApp alerts" },
+        "oilTypes": { "type": "array", "items": { "type": "string" } },
+        "warrantyCategories": { "type": "array", "items": { "type": "string" } },
+        "businessName": { "type": "string" },
+        "businessPhone": { "type": "string" },
+        "businessInstagram": { "type": "string" },
+        "businessAddress": { "type": "string" },
+        "isProfileComplete": { "type": "boolean" },
+        "evolutionApiUrl": { "type": "string" },
+        "evolutionApiKey": { "type": "string" },
+        "evolutionInstanceName": { "type": "string" },
         "userId": { "type": "string" }
       },
       "required": ["userId"]

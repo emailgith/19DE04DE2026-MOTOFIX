@@ -9,11 +9,11 @@ import {
   ChevronRight, Trash2, CheckCircle, MessageSquare, ArrowLeft, 
   RefreshCw, Wrench, Filter, UserCheck, UserX, AlertCircle, 
   ExternalLink, MoreVertical, Edit2, CheckCircle2, TrendingUp,
-  MessageCircle,
+  MessageCircle, Copy,
   BarChart3, Calendar, ShieldCheck, Download, FileText, X,
   PieChart, LayoutDashboard, ArrowUpRight, ArrowDownRight,
   TrendingDown, Bike, Users, AlertTriangle, ChevronLeft,
-  Droplets, Shield, Lock
+  Droplets, Shield, Lock, Cloud
 } from 'lucide-react';
 import { 
   format, parseISO, addDays, isAfter, isBefore, startOfMonth, 
@@ -111,6 +111,19 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
+
+const EVOLUTION_DEFAULTS = {
+  URL: 'http://159.65.228.86:8081',
+  KEY: 'MotoFix_Token_2026',
+  INSTANCE: 'MotoFix'
+};
+
+const DATABASE_DEFAULTS = {
+  PROVIDER: 'postgresql', // A correção vital: 'postgresql' em vez de 'postgres'
+  USER: 'atendai',
+  PASS: 'atendai',
+  DB: 'evolution'
+};
 
 const ErrorBoundary = ({ children }: { children: React.ReactNode }) => {
   const [hasError, setHasError] = useState(false);
@@ -242,6 +255,8 @@ export default function App() {
   });
   const [isSaving, setIsSaving] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [lastTestResult, setLastTestResult] = useState<{ success: boolean; message: string; details?: string } | null>(null);
 
   // Auto-reset delete confirmation after 3 seconds
   useEffect(() => {
@@ -367,17 +382,23 @@ export default function App() {
           businessPhone: data.businessPhone || '',
           businessInstagram: data.businessInstagram || '',
           businessAddress: data.businessAddress || '',
-          isProfileComplete: data.isProfileComplete || false
+          isProfileComplete: data.isProfileComplete || false,
+          evolutionApiUrl: data.evolutionApiUrl || (import.meta as any).env?.VITE_EVOLUTION_API_URL || EVOLUTION_DEFAULTS.URL,
+          evolutionApiKey: data.evolutionApiKey || (import.meta as any).env?.VITE_EVOLUTION_API_KEY || EVOLUTION_DEFAULTS.KEY,
+          evolutionInstanceName: data.evolutionInstanceName || (import.meta as any).env?.VITE_EVOLUTION_INSTANCE_NAME || EVOLUTION_DEFAULTS.INSTANCE
         };
         setSettings(updatedSettings);
         
         // If fields were missing, update the doc only if they are actually missing to avoid loops
-        const needsUpdate = !data.oilTypes || !data.warrantyCategories || data.isProfileComplete === undefined;
+        const needsUpdate = !data.oilTypes || !data.warrantyCategories || data.isProfileComplete === undefined || !data.evolutionApiUrl;
         if (needsUpdate) {
           updateDoc(settingsDoc, {
             oilTypes: updatedSettings.oilTypes,
             warrantyCategories: updatedSettings.warrantyCategories,
-            isProfileComplete: updatedSettings.isProfileComplete
+            isProfileComplete: updatedSettings.isProfileComplete,
+            evolutionApiUrl: updatedSettings.evolutionApiUrl,
+            evolutionApiKey: updatedSettings.evolutionApiKey,
+            evolutionInstanceName: updatedSettings.evolutionInstanceName
           }).catch(e => console.error("Error updating settings with defaults", e));
         }
       } else {
@@ -391,7 +412,10 @@ export default function App() {
           businessPhone: '',
           businessInstagram: '',
           businessAddress: '',
-          isProfileComplete: false
+          isProfileComplete: false,
+          evolutionApiUrl: (import.meta as any).env?.VITE_EVOLUTION_API_URL || EVOLUTION_DEFAULTS.URL,
+          evolutionApiKey: (import.meta as any).env?.VITE_EVOLUTION_API_KEY || EVOLUTION_DEFAULTS.KEY,
+          evolutionInstanceName: (import.meta as any).env?.VITE_EVOLUTION_INSTANCE_NAME || EVOLUTION_DEFAULTS.INSTANCE
         };
         setDoc(settingsDoc, initialSettings).catch(error => handleFirestoreError(error, OperationType.CREATE, 'settings'));
       }
@@ -577,7 +601,7 @@ export default function App() {
       lastServiceValue: clientData.serviceValue || clientData.oilPrice || 0,
       lastServiceNotes: clientData.notes || "Serviço registrado via formulário.",
       lastAlertDate: clientData.lastAlertDate || '',
-      createdAt: clientData.createdAt || format(new Date(), "yyyy-MM-dd'T'HH:mm:ss'Z'")
+      createdAt: editingClient?.createdAt || clientData.createdAt || format(new Date(), "yyyy-MM-dd'T'HH:mm:ss'Z'")
     };
 
     try {
@@ -899,6 +923,76 @@ export default function App() {
     }
   };
 
+  const sendAutomaticWhatsApp = async (client: Client) => {
+    if (!settings || !user) return;
+    if (!settings.evolutionApiUrl || !settings.evolutionApiKey || !settings.evolutionInstanceName) {
+      setToast({ message: "Configure a Evolution API nos Ajustes para usar o envio automático.", type: 'error' });
+      return;
+    }
+
+    setProcessingId(client.id);
+    const message = AlertService.buildReminderMessage(settings.whatsappTemplate, client);
+
+    try {
+      await AlertService.sendEvolutionMessage(settings, client, message);
+      await AlertService.registerAutomaticReminder(db, user.uid, client, message, 'sent');
+      sonnerToast.success(`Lembrete enviado automaticamente para ${client.name}!`);
+    } catch (error) {
+      console.error("Erro no envio automático:", error);
+      const errorMsg = error instanceof Error ? error.message : "Erro desconhecido";
+      await AlertService.registerAutomaticReminder(db, user.uid, client, message, 'failed', errorMsg);
+      sonnerToast.error(`Falha no envio automático: ${errorMsg}`);
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    if (!settings) return;
+    setIsTestingConnection(true);
+    setLastTestResult(null);
+    
+    try {
+      if (settings.evolutionApiUrl?.includes('localhost') || settings.evolutionApiUrl?.includes('127.0.0.1')) {
+        throw new Error("Localhost Detectado: Você não pode usar 'localhost' aqui. Use o IP real do seu servidor DigitalOcean (Ex: 159.65.228.86).");
+      }
+
+      const result = await AlertService.checkEvolutionConnection(settings);
+      if (result.instance?.state === 'open') {
+        const msg = "Conexão estabelecida com sucesso! O WhatsApp está pareado e pronto.";
+        sonnerToast.success(msg);
+        setLastTestResult({ success: true, message: msg });
+      } else {
+        const msg = `Servidor respondeu, mas o WhatsApp está: ${result.instance?.state || 'Desconectado'}.`;
+        sonnerToast.warning(msg);
+        setLastTestResult({ 
+          success: false, 
+          message: msg, 
+          details: "A API está online, mas a instância não está conectada. Abra o Evolution Manager e escaneie o QR Code." 
+        });
+      }
+    } catch (error) {
+      console.error("Erro no teste de conexão:", error);
+      const errorMsg = error instanceof Error ? error.message : "Erro desconhecido ao testar conexão.";
+      sonnerToast.error(errorMsg);
+      
+      let details = "Verifique se a URL e a API Key estão corretas.";
+      if (errorMsg.includes("Conexão Recusada")) {
+        details = "O servidor foi encontrado, mas a porta 8081 está fechada. Verifique se o Docker está rodando e se o Firewall (UFW) da sua VM permite a porta 8081.";
+      } else if (errorMsg.includes("Tempo Esgotado")) {
+        details = "O servidor não respondeu a tempo. Geralmente isso é bloqueio de Firewall no painel da DigitalOcean (Security Groups).";
+      }
+
+      setLastTestResult({ 
+        success: false, 
+        message: errorMsg,
+        details: details
+      });
+    } finally {
+      setIsTestingConnection(false);
+    }
+  };
+
   // --- Views ---
 
   const filteredClients = clients.filter(c => 
@@ -1122,12 +1216,28 @@ export default function App() {
                             <p className="text-[8px] text-slate-500 uppercase font-bold tracking-tighter">{client.bikeModel}</p>
                           </div>
                         </div>
-                        <button 
-                          onClick={() => sendWhatsApp(client)}
-                          className="bg-primary p-1.5 rounded-lg text-white hover:scale-105 transition-transform shadow-md shadow-primary/10"
-                        >
-                          <MessageSquare className="w-3 h-3" />
-                        </button>
+                        <div className="flex gap-2">
+                          {settings?.evolutionApiUrl && (
+                            <button 
+                              onClick={() => sendAutomaticWhatsApp(client)}
+                              disabled={processingId === client.id}
+                              className={cn(
+                                "p-1.5 rounded-lg text-white transition-all shadow-md active:scale-95",
+                                processingId === client.id ? "bg-slate-500 cursor-not-allowed" : "bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/10"
+                              )}
+                              title="Enviar Automático via Evolution API"
+                            >
+                              {processingId === client.id ? <div className="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin" /> : <Cloud className="w-3 h-3" />}
+                            </button>
+                          )}
+                          <button 
+                            onClick={() => sendWhatsApp(client)}
+                            className="bg-primary p-1.5 rounded-lg text-white hover:scale-105 transition-transform shadow-md shadow-primary/10"
+                            title="Abrir WhatsApp Manual"
+                          >
+                            <MessageSquare className="w-3 h-3" />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1295,9 +1405,31 @@ export default function App() {
                             <p className="text-[10px] text-slate-500 font-medium">{client.bikeModel}</p>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <p className="text-red-500 font-bold text-[10px]">Vencido</p>
-                          <p className={cn("text-[9px]", theme === 'dark' ? "text-slate-500" : "text-slate-600 font-bold")}>{format(parseISO(client.nextMaintenanceDate), 'dd/MM/yyyy')}</p>
+                        <div className="flex items-center gap-2">
+                          <div className="text-right">
+                            <p className="text-red-500 font-bold text-[10px]">Vencido</p>
+                            <p className={cn("text-[9px]", theme === 'dark' ? "text-slate-500" : "text-slate-600 font-bold")}>{format(parseISO(client.nextMaintenanceDate), 'dd/MM/yyyy')}</p>
+                          </div>
+                          {settings?.evolutionApiUrl && (
+                            <button 
+                              onClick={() => sendAutomaticWhatsApp(client)}
+                              disabled={processingId === client.id}
+                              className={cn(
+                                "p-2 rounded-lg text-white transition-all shadow-md active:scale-95",
+                                processingId === client.id ? "bg-slate-500 cursor-not-allowed" : "bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/10"
+                              )}
+                              title="Enviar Automático via Evolution API"
+                            >
+                              {processingId === client.id ? <div className="w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin" /> : <Cloud className="w-3.5 h-3.5" />}
+                            </button>
+                          )}
+                          <button 
+                            onClick={() => sendWhatsApp(client)}
+                            className="bg-primary p-2 rounded-lg text-white hover:scale-105 transition-transform shadow-md shadow-primary/10"
+                            title="Abrir WhatsApp Manual"
+                          >
+                            <MessageSquare className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </div>
                     ))}
@@ -1529,19 +1661,41 @@ export default function App() {
                           )}>{client.lastServiceType} • R$ {client.lastServiceValue?.toFixed(2)}</p>
                         )}
                       </div>
-                      <div>
+                      <div className="flex flex-col items-end">
                         <p className={cn(
-                          "text-[8px] uppercase font-bold tracking-widest",
+                          "text-[8px] uppercase font-bold tracking-widest text-right",
                           client.status === 'OK' ? theme === 'dark' ? 'text-slate-500' : 'text-slate-400' : 
                           client.status === 'WARNING' ? 'text-yellow-500' : 'text-red-500'
                         )}>Próximo Alerta</p>
                         <p className={cn(
-                          "text-[10px] font-bold",
+                          "text-[10px] font-bold text-right",
                           client.status === 'OK' ? theme === 'dark' ? 'text-white' : 'text-slate-900' : 
                           client.status === 'WARNING' ? 'text-yellow-500' : 'text-red-500'
                         )}>
                           {format(parseISO(client.nextMaintenanceDate), 'dd/MM/yyyy')}
                         </p>
+                        <div className="flex gap-1.5 mt-1.5">
+                          {settings?.evolutionApiUrl && (
+                            <button 
+                              onClick={() => sendAutomaticWhatsApp(client)}
+                              disabled={processingId === client.id}
+                              className={cn(
+                                "p-1.5 rounded-lg text-white transition-all shadow-md active:scale-95",
+                                processingId === client.id ? "bg-slate-500" : "bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/10"
+                              )}
+                              title="Enviar Automático via API"
+                            >
+                              {processingId === client.id ? <div className="w-2.5 h-2.5 border-2 border-white/20 border-t-white rounded-full animate-spin" /> : <Cloud className="w-2.5 h-2.5" />}
+                            </button>
+                          )}
+                          <button 
+                            onClick={() => sendWhatsApp(client)}
+                            className="bg-primary/20 text-primary p-1.5 rounded-lg hover:bg-primary hover:text-white transition-all shadow-sm"
+                            title="Abrir WhatsApp Manual"
+                          >
+                            <MessageSquare className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                     {client.lastServiceNotes && (
@@ -2602,6 +2756,158 @@ export default function App() {
                 {saveMessage && (
                   <p className="text-emerald-500 text-center text-[10px] font-bold animate-bounce">{saveMessage}</p>
                 )}
+              </div>
+
+              {/* Evolution API Integration Settings */}
+              <div className={cn(
+                "p-4 rounded-xl border space-y-4 transition-all",
+                theme === 'dark' ? "bg-slate-800/40 border-slate-700/50" : "bg-white border-slate-200 shadow-sm"
+              )}>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <Cloud className="w-4 h-4 text-primary" />
+                    <h3 className="text-sm font-bold">Integração Evolution API (DigitalOcean)</h3>
+                  </div>
+                  <span className={cn(
+                    "px-2 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-widest",
+                    settings?.evolutionApiUrl ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"
+                  )}>
+                    {settings?.evolutionApiUrl ? "Conectado" : "Desconectado"}
+                  </span>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className={cn(
+                      "text-[10px] font-bold uppercase tracking-widest px-1",
+                      theme === 'dark' ? "text-slate-500" : "text-slate-400"
+                    )}>URL da API (com porta)</label>
+                    <input 
+                      value={settings?.evolutionApiUrl || ''}
+                      onChange={(e) => setSettings(s => s ? { ...s, evolutionApiUrl: e.target.value } : null)}
+                      placeholder="Ex: http://159.65.228.86:8081"
+                      className={cn(
+                        "w-full rounded-lg p-2 text-sm focus:ring-1 focus:ring-primary outline-none transition-all",
+                        theme === 'dark' ? "bg-slate-900/50 border-slate-700 text-white" : "bg-slate-50 border-slate-200 text-black placeholder:text-slate-400"
+                      )}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className={cn(
+                      "text-[10px] font-bold uppercase tracking-widest px-1",
+                      theme === 'dark' ? "text-slate-500" : "text-slate-400"
+                    )}>API Key</label>
+                    <input 
+                      type="password"
+                      value={settings?.evolutionApiKey || ''}
+                      onChange={(e) => setSettings(s => s ? { ...s, evolutionApiKey: e.target.value } : null)}
+                      placeholder="Sua AUTHENTICATION_API_KEY"
+                      className={cn(
+                        "w-full rounded-lg p-2 text-sm focus:ring-1 focus:ring-primary outline-none transition-all",
+                        theme === 'dark' ? "bg-slate-900/50 border-slate-700 text-white" : "bg-slate-50 border-slate-200 text-black placeholder:text-slate-400"
+                      )}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className={cn(
+                      "text-[10px] font-bold uppercase tracking-widest px-1",
+                      theme === 'dark' ? "text-slate-500" : "text-slate-400"
+                    )}>Nome da Instância</label>
+                    <input 
+                      value={settings?.evolutionInstanceName || ''}
+                      onChange={(e) => setSettings(s => s ? { ...s, evolutionInstanceName: e.target.value } : null)}
+                      placeholder="Ex: MotoFix_Loja"
+                      className={cn(
+                        "w-full rounded-lg p-2 text-sm focus:ring-1 focus:ring-primary outline-none transition-all",
+                        theme === 'dark' ? "bg-slate-900/50 border-slate-700 text-white" : "bg-slate-50 border-slate-200 text-black placeholder:text-slate-400"
+                      )}
+                    />
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-lg bg-orange-500/5 border border-orange-500/10 space-y-2">
+                  <p className="text-[10px] text-orange-500 leading-tight">
+                    <strong>Atenção:</strong> Certifique-se de que a instância já foi criada no Evolution Manager e está conectada ao WhatsApp antes de tentar o envio automático.
+                  </p>
+                  {window.location.protocol === 'https:' && (
+                    <p className="text-[9px] text-red-500 leading-tight font-bold border-t border-red-500/10 pt-2">
+                      Dica de Segurança: Como este site usa HTTPS, sua URL da API também deve ser HTTPS (ex: https://dominio.com). Se for apenas IP (http), o navegador pode bloquear a conexão.
+                    </p>
+                  )}
+                </div>
+
+                {lastTestResult && (
+                  <div className={cn(
+                    "p-3 rounded-lg border text-xs animate-in fade-in slide-in-from-top-2 duration-300",
+                    lastTestResult.success 
+                      ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-500" 
+                      : "bg-red-500/5 border-red-500/20 text-red-500"
+                  )}>
+                    <div className="flex items-start gap-2">
+                      {lastTestResult.success ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+                      <div>
+                        <p className="font-bold">{lastTestResult.message}</p>
+                        {lastTestResult.details && <p className="mt-1 opacity-80">{lastTestResult.details}</p>}
+                      </div>
+                    </div>
+                    
+                    {!lastTestResult.success && lastTestResult.message.includes("Conexão Recusada") && (
+                      <div className="mt-3 p-2 bg-slate-900/50 rounded border border-red-500/10 space-y-2">
+                        <p className="font-bold text-[10px] uppercase text-red-400">🚨 O motor (API) está com erro de configuração no Servidor.</p>
+                        <p className="text-[9px] text-slate-400 leading-tight">
+                          <strong>Análise:</strong> O seu log mostra "Database provider invalid" porque o servidor espera a palavra <u>postgresql</u> (com L). 
+                        </p>
+                        <div className="space-y-1.5 pt-1">
+                          <p className="text-[8px] font-bold text-slate-500 uppercase tracking-tighter">1. Copie e Rode este Reset Total no SSH:</p>
+                          <div className="flex items-center justify-between bg-black/40 p-1.5 rounded font-mono text-[9px] text-slate-300">
+                            <code className="line-clamp-1 whitespace-nowrap overflow-hidden text-emerald-400"># SCRIPT DE CORREÇÃO DEFINITIVA (CLIQUE AO LADO!)</code>
+                            <button onClick={() => { 
+                                const script = 'cd ~/evolution && docker compose down && rm -f docker-compose.yml docker-compose.yaml .env && sudo ufw allow 8081/tcp && sudo ufw allow 80/tcp && sudo ufw reload && cat <<EOF > .env\nSERVER_URL=http://159.65.228.86:8081\nAUTHENTICATION_API_KEY=MotoFix_Token_2026\nPORT=8080\nDATABASE_ENABLED=true\nDATABASE_CONNECTION_URI=postgresql://atendai:atendai@postgres_evolution:5432/evolution?sslmode=disable\nDATABASE_CONNECTION_PROVIDER=postgresql\nDATABASE_TYPE=postgresql\nDATABASE_PROVIDER=postgresql\nREDIS_ENABLED=true\nREDIS_URI=redis://redis_evolution:6379\nEOF\ncat <<EOF > docker-compose.yaml\nservices:\n  postgres_evolution:\n    image: postgres:15\n    container_name: postgres_evolution\n    environment:\n      - POSTGRES_USER=atendai\n      - POSTGRES_PASSWORD=atendai\n      - POSTGRES_DB=evolution\n    volumes:\n      - ./postgres_data:/var/lib/postgresql/data\n    networks:\n      - evolution_net\n  redis_evolution:\n    image: redis:latest\n    container_name: redis_evolution\n    networks:\n      - evolution_net\n  evolution_api:\n    image: atendai/evolution-api:latest\n    container_name: evolution_api\n    restart: always\n    ports:\n      - "8081:8080"\n    env_file:\n      - .env\n    environment:\n      - DATABASE_CONNECTION_PROVIDER=postgresql\n      - DATABASE_TYPE=postgresql\n      - DATABASE_PROVIDER=postgresql\n    depends_on:\n      - postgres_evolution\n      - redis_evolution\n    networks:\n      - evolution_net\nnetworks:\n  evolution_net:\n    driver: bridge\nEOF\ndocker compose up -d && sleep 15 && docker ps && docker logs evolution_api --tail 20';
+                              navigator.clipboard.writeText(script); 
+                              sonnerToast.success("Script de Reset Copiado!"); 
+                            }} className="shrink-0 p-1 bg-emerald-500/20 text-emerald-400 rounded hover:bg-emerald-500/30"><Copy className="w-3.5 h-3.5" /></button>
+                          </div>
+                          <p className="text-[8px] text-slate-500 italic mt-1">* Este botão acima copia um script que limpa e reinstala a API corretamente.</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex gap-2">
+                  <button 
+                    onClick={handleTestConnection}
+                    disabled={isTestingConnection}
+                    className={cn(
+                      "flex-1 py-2.5 rounded-lg font-bold transition-all text-xs flex items-center justify-center gap-2",
+                      theme === 'dark' ? "bg-slate-700 text-slate-200 hover:bg-slate-600" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    )}
+                  >
+                    {isTestingConnection ? <RefreshCw className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                    Testar Conexão
+                  </button>
+                  <button 
+                    onClick={async () => {
+                      if (user && settings) {
+                        try {
+                          await setDoc(doc(db, 'settings', user.uid), {
+                            ...settings,
+                            evolutionApiUrl: settings.evolutionApiUrl,
+                            evolutionApiKey: settings.evolutionApiKey,
+                            evolutionInstanceName: settings.evolutionInstanceName
+                          }, { merge: true });
+                          setSaveMessage("Integração salva com sucesso!");
+                          setTimeout(() => setSaveMessage(null), 3000);
+                        } catch (error) {
+                          handleFirestoreError(error, OperationType.UPDATE, 'settings');
+                        }
+                      }
+                    }}
+                    className="flex-[2] bg-emerald-500/10 text-emerald-500 py-2.5 rounded-lg font-bold hover:bg-emerald-500/20 transition-all border border-emerald-500/20 text-xs"
+                  >
+                    Salvar Integração API
+                  </button>
+                </div>
               </div>
 
               {/* Oil Types Management */}
